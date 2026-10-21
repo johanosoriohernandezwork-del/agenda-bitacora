@@ -290,6 +290,19 @@ kbd{font-family:var(--f-mono);font-size:.72rem;border:1px solid var(--line);bord
 .crow .mono{color:var(--cash);font-weight:600}
 @media (max-width:760px){.ctiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+/* historial */
+.hfilter{display:inline-flex;background:var(--sunk);border-radius:999px;padding:3px}
+.hfilter button{border:0;background:transparent;height:30px;padding:0 12px;border-radius:999px;font-weight:600;color:var(--muted);font-size:.84rem}
+.hfilter button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.hrow{display:flex;gap:10px;align-items:flex-start;padding:6px 4px;border:0;background:transparent;text-align:left;width:100%;border-radius:8px}
+.hrow:hover{background:var(--sunk)}
+.hic{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;flex:none;background:color-mix(in srgb,var(--c) 16%,transparent);color:var(--c)}
+.hic .ico{width:15px;height:15px;stroke-width:2.6}
+.hw{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.hw b{font-weight:600;overflow-wrap:anywhere}
+.hw span{font-size:.8rem;color:var(--muted);overflow-wrap:anywhere}
+.hamt{font-family:var(--f-mono);font-variant-numeric:tabular-nums;font-weight:600;color:var(--cash);white-space:nowrap}
+
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;font-weight:600;font-size:.88rem;z-index:80;box-shadow:var(--shadow);max-width:calc(100% - 32px);text-align:center}
 .kb{font-size:.78rem;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
 
@@ -359,6 +372,7 @@ kbd{font-family:var(--f-mono);font-size:.72rem;border:1px solid var(--line);bord
           <button data-view="week" aria-pressed="false">Semana</button>
           <button data-view="agenda" aria-pressed="false">Agenda</button>
           <button data-view="cobros" aria-pressed="false">Cobros</button>
+          <button data-view="historial" aria-pressed="false">Historial</button>
         </div>
       </div>
       <div id="main"></div>
@@ -388,7 +402,7 @@ kbd{font-family:var(--f-mono);font-size:.72rem;border:1px solid var(--line);bord
           <button class="btn small" id="notifBtn"><svg class="ico"><use href="#i-bell"/></svg>Avisos del sistema</button>
         </div>
       </section>
-      <div class="kb"><span><kbd>N</kbd> nueva</span><span><kbd>T</kbd> hoy</span><span><kbd>←</kbd><kbd>→</kbd> mover</span><span><kbd>M</kbd><kbd>S</kbd><kbd>A</kbd><kbd>C</kbd> vistas</span></div>
+      <div class="kb"><span><kbd>N</kbd> nueva</span><span><kbd>T</kbd> hoy</span><span><kbd>←</kbd><kbd>→</kbd> mover</span><span><kbd>M</kbd><kbd>S</kbd><kbd>A</kbd><kbd>C</kbd><kbd>H</kbd> vistas</span></div>
     </aside>
   </div>
 </div>
@@ -537,8 +551,8 @@ function rel(ms){
 }
 
 // ---------- state ----------
-const S={view:"month",cursor:todayISO(),selected:todayISO(),q:"",cats:new Set(CATS.map(c=>c[0])),editing:null,editDate:null,checklist:[]};
-try{const v=localStorage.getItem(LS_KEY+":view");if(v&&["month","week","agenda","cobros"].includes(v))S.view=v}catch(e){}
+const S={view:"month",cursor:todayISO(),selected:todayISO(),q:"",cats:new Set(CATS.map(c=>c[0])),editing:null,editDate:null,checklist:[],hf:"all"};
+try{const v=localStorage.getItem(LS_KEY+":view");if(v&&["month","week","agenda","cobros","historial"].includes(v))S.view=v}catch(e){}
 
 // ---------- store (db per viewer, falls back to this browser) ----------
 const Store={mode:"loading",docs:new Map(),col:null,ws:{}};
@@ -728,6 +742,10 @@ function toggleDone(id,d){
     const set=new Set(t.doneDates||[]);set.has(d)?set.delete(d):set.add(d);
     t.doneDates=[...set].sort().slice(-500);
   }else t.done=!t.done;
+  // registro de cuándo se completó cada vez (para el Historial)
+  const key=isRec(t)?d:t.date,log={...(t.doneLog||{})};
+  if(isDone(t,d))log[key]=Date.now();else delete log[key];
+  t.doneLog=log;
   t.updated=Date.now();
   put(id,strip(t));
   if(isDone(t,d))toast("¡Hecha! ✓");
@@ -903,6 +921,7 @@ function renderMain(){
   const m=$("#main"),t0=todayISO();
   ["#prevBtn","#nextBtn","#todayBtn"].forEach(s=>$(s).hidden=S.view==="cobros");
   if(S.view==="cobros"){renderCobros(m);return}
+  if(S.view==="historial"){renderHistorial(m);return}
   if(S.view==="month"){
     const first=parse(S.cursor);first.setDate(1);
     $("#calTitle").textContent=fmt(iso(first),{month:"long",year:"numeric"});
@@ -988,6 +1007,83 @@ function debtCard(x,t0){
     <div class="dacts">${s>0?`<button class="btn small cashbtn" data-pay="${x.id}">Registrar pago</button>`:""}<button class="btn small" data-edebt="${x.id}">Editar</button>${s>0?`<button class="btn small" data-caldebt="${x.id}" title="Poner avisos de cobro ${CAL_WHERE}"><svg class="ico"><use href="#i-cal"/></svg>Alarma</button>`:""}</div>
     ${pays.length?`<details><summary>Historial · ${pays.length} pago${pays.length===1?"":"s"}</summary><div class="hist">${pays.map(p=>`<div><span class="mono" style="color:var(--muted)">${fmt(p.d,{day:"2-digit",month:"short",year:"2-digit"})}</span><span class="a">${money(p.amt)}</span><span class="n">${esc(p.note||"")}</span><button data-delpay="${x.id}" data-pid="${p.id}" aria-label="Borrar pago" title="Borrar pago"><svg class="ico"><use href="#i-x"/></svg></button></div>`).join("")}</div></details>`:""}
   </article>`;
+}
+
+// ---------- historial ----------
+function historyEntries(ym){
+  const out=[];
+  for(const t of tasks()){
+    if(!S.cats.has(t.cat)||(S.q&&!matches(t)))continue;
+    const occs=isRec(t)?(t.doneDates||[]):(t.done?[t.date]:[]);
+    for(const occ of occs){
+      const ts=(t.doneLog||{})[occ];
+      const day=ts?iso(new Date(ts)):occ;
+      if(day.slice(0,7)===ym)out.push({kind:"task",day,ts:ts||0,t,occ});
+    }
+  }
+  const q=S.q.toLowerCase();
+  for(const x of debts())for(const p of x.payments||[]){
+    if(!p.d||p.d.slice(0,7)!==ym)continue;
+    if(q&&!(x.name+" "+(p.note||"")).toLowerCase().includes(q))continue;
+    out.push({kind:"pay",day:p.d,ts:p.at||0,x,p});
+  }
+  return out.sort((a,b)=>b.day.localeCompare(a.day)||b.ts-a.ts);
+}
+const hhmm=ts=>new Date(ts).toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"});
+function renderHistorial(m){
+  const first=parse(S.cursor);first.setDate(1);const ym=iso(first).slice(0,7);
+  $("#calTitle").textContent="Historial · "+fmt(iso(first),{month:"long",year:"numeric"});
+  const all=historyEntries(ym);
+  const nT=all.filter(e=>e.kind==="task").length,pays=all.filter(e=>e.kind==="pay"),sum=pays.reduce((s,e)=>s+(+e.p.amt||0),0);
+  const onTime=all.filter(e=>e.kind==="task"&&e.day<=e.occ).length;
+  const list=all.filter(e=>S.hf==="all"||e.kind===S.hf);
+  let h=`<div class="cobros"><div class="ctiles">
+    <div class="ctile"><span class="lab">Tareas hechas</span><span class="val">${nT}</span><span class="hint">${nT?`${Math.round(onTime/nT*100)}% a tiempo`:"ninguna este mes"}</span></div>
+    <div class="ctile cashv"><span class="lab">Total cobrado</span><span class="val">${money(sum)}</span><span class="hint">${pays.length} pago${pays.length===1?"":"s"} recibido${pays.length===1?"":"s"}</span></div>
+    <div class="ctile"><span class="lab">Personas que pagaron</span><span class="val">${new Set(pays.map(e=>e.x.id)).size}</span><span class="hint">este mes</span></div>
+    <div class="ctile"><span class="lab">Días con actividad</span><span class="val">${new Set(all.map(e=>e.day)).size}</span><span class="hint">de ${lastDayOf(first.getFullYear(),first.getMonth())}</span></div>
+  </div>
+  <div class="cbar"><div class="hfilter" role="group" aria-label="Mostrar">${[["all","Todo"],["task","Tareas"],["pay","Pagos"]].map(([v,l])=>`<button data-hf="${v}" aria-pressed="${S.hf===v}">${l}</button>`).join("")}</div>
+    <span class="hint" style="margin-right:auto"></span>${all.length?`<button class="btn small" data-csv="${ym}"><svg class="ico"><use href="#i-down"/></svg>Exportar mes</button>`:""}</div>`;
+  if(!list.length){
+    h+=`<div class="empty"><h3>Nada registrado en ${fmt(iso(first),{month:"long"})}</h3><p>Aquí quedan las tareas que marcas como hechas y los pagos que registras en Cobros, día por día.</p></div>`;
+  }else{
+    h+=`<div class="agenda" style="padding:0">`;
+    const days=[...new Set(list.map(e=>e.day))];
+    for(const d of days){
+      const items=list.filter(e=>e.day===d);
+      const dsum=items.filter(e=>e.kind==="pay").reduce((s,e)=>s+(+e.p.amt||0),0);
+      h+=`<div class="agroup"><div class="when"><b>${parse(d).getDate()}</b>${d===todayISO()?"hoy":fmt(d,{weekday:"long"})}${dsum?`<br><span class="hamt" style="font-size:.78rem">+${money(dsum)}</span>`:""}</div><div class="items">${items.map(histRow).join("")}</div></div>`;
+    }
+    h+=`</div>`;
+  }
+  m.innerHTML=h+"</div>";
+}
+function histRow(e){
+  if(e.kind==="pay"){
+    const s=saldoOf(e.x);
+    return `<button class="hrow" data-cobros="${e.day}" style="--c:var(--cash)"><span class="hic"><svg class="ico"><use href="#i-down"/></svg></span>
+      <span class="hw"><b>${esc(e.x.name)} pagó</b><span>${e.ts?hhmm(e.ts)+" · ":""}${s>0?`le queda ${money(s)}`:"terminó de pagar"}${e.p.note?" · "+esc(e.p.note):""}</span></span><span class="hamt">${money(e.p.amt)}</span></button>`;
+  }
+  const t=e.t,late=e.day>e.occ,early=e.day<e.occ;
+  return `<button class="hrow" data-open="${t.id}" data-date="${e.occ}" style="--c:var(--cat-${t.cat})"><span class="hic"><svg class="ico"><use href="#i-check"/></svg></span>
+    <span class="hw"><b>${esc(t.title)}</b><span>${CATNAME[t.cat]||t.cat}${e.ts?" · hecha a las "+hhmm(e.ts):""}${late?` · era para el ${fmt(e.occ,{day:"numeric",month:"short"})}`:early?` · adelantada (${fmt(e.occ,{day:"numeric",month:"short"})})`:""}</span></span></button>`;
+}
+function exportCSV(ym){
+  const rows=[["Fecha","Hora","Tipo","Detalle","Categoría / Persona","Monto","Nota"]];
+  for(const e of historyEntries(ym).slice().reverse()){
+    if(e.kind==="pay")rows.push([e.day,e.ts?hhmm(e.ts):"","Pago recibido",`Pago de ${e.x.name}`,e.x.name,String(e.p.amt),e.p.note||""]);
+    else rows.push([e.day,e.ts?hhmm(e.ts):"","Tarea hecha",e.t.title,CATNAME[e.t.cat]||e.t.cat,"",e.day!==e.occ?`programada ${e.occ}`:""]);
+  }
+  const csv="﻿"+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(";")).join("\r\n");
+  const file=new File([csv],`bitacora-historial-${ym}.csv`,{type:"text/csv"});
+  (async()=>{
+    try{
+      if(navigator.canShare&&navigator.canShare({files:[file]})&&matchMedia("(pointer:coarse)").matches){await navigator.share({files:[file],title:"Historial "+ym});return}
+      const url=URL.createObjectURL(file),a=document.createElement("a");a.href=url;a.download=file.name;document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);toast("Historial descargado (se abre en Excel)");
+    }catch(err){if(!err||err.name!=="AbortError")toast("No se pudo exportar")}
+  })();
 }
 
 function taskRow(t,d,showDate){
@@ -1130,7 +1226,8 @@ function toast(msg){const t=$("#toast");t.textContent=msg;t.hidden=false;clearTi
 
 // ---------- navigation ----------
 function shift(n){
-  if(S.view==="month"){const d=parse(S.cursor);d.setDate(1);d.setMonth(d.getMonth()+n);S.cursor=iso(d)}
+  if(S.view==="cobros")return;
+  if(S.view==="month"||S.view==="historial"){const d=parse(S.cursor);d.setDate(1);d.setMonth(d.getMonth()+n);S.cursor=iso(d)}
   else if(S.view==="week"){S.cursor=addDays(S.cursor,7*n);S.selected=addDays(S.selected,7*n)}
   else{S.selected=addDays(S.selected,n);S.cursor=S.selected}
   render();
@@ -1154,8 +1251,10 @@ document.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>setView(b.data
 let qT=null;$("#q").addEventListener("input",e=>{clearTimeout(qT);qT=setTimeout(()=>{S.q=e.target.value.trim();render()},120)});
 
 document.addEventListener("click",e=>{
-  const el=e.target.closest("[data-toggle],[data-open],[data-new],[data-cat],[data-day],[data-close],[data-snooze],[data-cldel],[data-cobros],[data-newdebt],[data-pay],[data-edebt],[data-quickpay],[data-delpay],[data-caldebt],[data-calall]");
+  const el=e.target.closest("[data-toggle],[data-open],[data-new],[data-cat],[data-day],[data-close],[data-snooze],[data-cldel],[data-cobros],[data-newdebt],[data-pay],[data-edebt],[data-quickpay],[data-delpay],[data-caldebt],[data-calall],[data-hf],[data-csv]");
   if(!el)return;
+  if(el.dataset.hf){S.hf=el.dataset.hf;renderMain();return}
+  if(el.dataset.csv){exportCSV(el.dataset.csv);return}
   if(el.dataset.caldebt){const x=getDebt(el.dataset.caldebt);if(x)sendToCalendar(debtEvents(x),"cobros "+x.name);return}
   if(el.dataset.calall){sendToCalendar(debts().flatMap(debtEvents),"cobros bitacora");return}
   if(el.dataset.cobros){e.stopPropagation();S.selected=el.dataset.cobros;setView("cobros");return}
@@ -1260,7 +1359,7 @@ $("#debtForm").addEventListener("submit",e=>{
 });
 $("#dDel").onclick=()=>{
   const b=$("#dDel");
-  if(!b.classList.contains("armed")){b.classList.add("armed");b.querySelector("span").textContent="¿Seguro? Pulsa otra vez";return}
+  if(!b.classList.contains("armed")){b.classList.add("armed");b.querySelector("span").textContent="¿Seguro? También se borran sus pagos del Historial";return}
   put(editingDebt,null);$("#debtView").hidden=true;toast("Deudor eliminado");
 };
 function openPay(id){
@@ -1272,7 +1371,7 @@ function openPay(id){
 }
 function addPayment(id,amt,d,note){
   const x=getDebt(id);if(!x||!amt)return;
-  const p={id:"p"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),d:d||todayISO(),amt,note};
+  const p={id:"p"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),d:d||todayISO(),amt,note,at:Date.now()};
   const nx={...strip(x),payments:[...(x.payments||[]),p],updated:Date.now()};
   put(id,nx);const s=saldoOf(nx);
   toast(s>0?`${x.name} pagó ${money(amt)} · le queda ${money(s)}`:`¡${x.name} terminó de pagar!`);
@@ -1333,6 +1432,7 @@ document.addEventListener("keydown",e=>{
   const k=e.key.toLowerCase();
   if(k==="n"){e.preventDefault();S.view==="cobros"?openDebt(null):openEditor(null,S.selected)}
   else if(k==="c")setView("cobros");
+  else if(k==="h")setView("historial");
   else if(k==="t")goToday();
   else if(k==="m")setView("month");
   else if(k==="s")setView("week");

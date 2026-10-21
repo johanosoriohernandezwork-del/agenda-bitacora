@@ -1,6 +1,6 @@
 // Bitácora: guarda la app en el teléfono para que abra sin internet.
 // Al cambiar cualquier archivo de la app, sube este número para que se actualice.
-const CACHE = "bitacora-v2";
+const CACHE = "bitacora-v3";
 const CORE = ["./", "index.html", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png", "icon-180.png"];
 
 self.addEventListener("install", e => {
