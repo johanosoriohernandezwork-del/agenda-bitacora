@@ -328,6 +328,7 @@ kbd{font-family:var(--f-mono);font-size:.72rem;border:1px solid var(--line);bord
   <symbol id="i-note" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M12 14v4M10 16h4"/></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
 </svg>
 
@@ -424,11 +425,25 @@ kbd{font-family:var(--f-mono);font-size:.72rem;border:1px solid var(--line);bord
     <footer>
       <button type="button" class="btn danger" id="delBtn" hidden><svg class="ico"><use href="#i-trash"/></svg><span>Eliminar</span></button>
       <button type="button" class="btn" id="dupBtn" hidden><svg class="ico"><use href="#i-copy"/></svg>Duplicar</button>
+      <button type="button" class="btn" id="calBtn" hidden><svg class="ico"><use href="#i-cal"/></svg>Calendario</button>
       <span class="sp"></span>
       <button type="button" class="btn" data-close>Cancelar</button>
       <button type="submit" class="btn primary">Guardar</button>
     </footer>
   </form>
+</div>
+
+<!-- Llevar la alarma al calendario del teléfono -->
+<div class="overlay" id="calPrompt" hidden>
+  <div class="sheet" style="width:min(420px,100%)" role="dialog" aria-labelledby="cpTitle">
+    <header><h3 id="cpTitle">Guardado</h3><button type="button" class="btn icon" data-close aria-label="Cerrar"><svg class="ico"><use href="#i-x"/></svg></button></header>
+    <div style="padding:16px 18px 18px;display:flex;flex-direction:column;gap:10px">
+      <p id="cpText" style="margin:0 0 6px"></p>
+      <button type="button" class="btn primary" id="cpGo" style="justify-content:center;height:50px;font-size:1rem"><svg class="ico"><use href="#i-cal"/></svg><span id="cpGoLbl">Poner alarma en el iPhone</span></button>
+      <button type="button" class="btn small" id="cpShare" style="justify-content:center" hidden>¿No se abrió el Calendario? Compartir archivo</button>
+      <button type="button" class="btn" data-close style="justify-content:center">Ahora no</button>
+    </div>
+  </div>
 </div>
 
 <!-- Deudor -->
@@ -595,6 +610,81 @@ const debtsDue=d=>debts().filter(x=>saldoOf(x)>0&&x.start<=d).sort((a,b)=>a.name
 const dueTotal=d=>debtsDue(d).reduce((s,x)=>s+cuotaFor(x),0);
 function cashChip(d){if(!isCobroDay(d))return "";const n=dueTotal(d);return n?`<button class="chip cash" data-cobros="${d}" title="Día de cobro"><span class="n">Cobrar ${money(n)}</span></button>`:""}
 function cobroAlarmAt(d){const st=Store.docs.get("s_cobros")||{};return (st.snooze&&st.snooze[d])||parse(d).setHours(9,0,0,0)}
+
+// ---------- alarmas en el calendario del teléfono (.ics) ----------
+const IS_IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
+const IS_ANDROID=/Android/.test(navigator.userAgent);
+const CAL_WHERE=IS_IOS?"en el iPhone":IS_ANDROID?"en el celular":"en tu calendario";
+const icsEsc=s=>String(s??"").replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");
+const icsDate=d=>d.replace(/-/g,"");
+const icsDT=(d,mins)=>`${icsDate(d)}T${pad(Math.floor(mins/60))}${pad(mins%60)}00`;
+const icsStamp=()=>new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d+/,"");
+const icsTrigger=before=>before===0?"PT0M":before>0?`-PT${before}M`:`PT${-before}M`; // minutos antes del inicio
+function icsFold(line){const ch=Array.from(line);if(ch.length<=60)return line;const out=[];for(let i=0;i<ch.length;i+=60)out.push((i?" ":"")+ch.slice(i,i+60).join(""));return out.join("\r\n")}
+function taskEvent(t){
+  const L=["BEGIN:VEVENT",`UID:${t.id}@bitacora`,`DTSTAMP:${icsStamp()}`,`SUMMARY:${icsEsc(t.title)}`];
+  if(t.time){
+    const s=minsOf(t.time),e=s+(+t.dur||60);
+    L.push(`DTSTART:${icsDT(t.date,s)}`,e<1440?`DTEND:${icsDT(t.date,e)}`:`DTEND:${icsDT(addDays(t.date,1),e-1440)}`);
+  }else L.push(`DTSTART;VALUE=DATE:${icsDate(t.date)}`,`DTEND;VALUE=DATE:${icsDate(addDays(t.date,1))}`);
+  const R={daily:"FREQ=DAILY",weekdays:"FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",weekly:"FREQ=WEEKLY",monthly:"FREQ=MONTHLY",yearly:"FREQ=YEARLY"}[t.repeat];
+  if(R)L.push(`RRULE:${R}${t.until?`;UNTIL=${icsDate(t.until)}T235959`:""}`);
+  if(t.location)L.push(`LOCATION:${icsEsc(t.location)}`);
+  const desc=[t.notes,(t.checklist||[]).map(c=>(c.d?"✓ ":"☐ ")+c.t).join("\n")].filter(Boolean).join("\n\n");
+  if(desc)L.push(`DESCRIPTION:${icsEsc(desc)}`);
+  // tareas de todo el día: la alarma suena a las 9:00 menos lo que pidas
+  if(t.alarm>=0)L.push("BEGIN:VALARM","ACTION:DISPLAY",`DESCRIPTION:${icsEsc(t.title)}`,`TRIGGER:${icsTrigger(t.time?t.alarm:t.alarm-540)}`,"END:VALARM");
+  L.push("END:VEVENT");
+  return L;
+}
+function firstWhere(from,pred){let d=from;for(let i=0;i<62;i++){if(pred(d))return d;d=addDays(d,1)}return null}
+function debtEvents(x){
+  const s=saldoOf(x);if(s<=0)return [];
+  const t0=todayISO(),first=nextCobroDay(x.start>t0?x.start:t0);
+  const n=x.cuota>0?Math.ceil(s/x.cuota):1;
+  let last=first;for(let i=1;i<n;i++)last=nextCobroDay(addDays(last,1));
+  const sum=icsEsc(`💰 Cobrar a ${x.name}: ${money(cuotaFor(x))}`);
+  const desc=icsEsc(`Saldo pendiente: ${money(s)}${x.phone?"\nTeléfono: "+x.phone:""}${x.notes?"\n"+x.notes:""}`);
+  const ev=(uid,start,rule)=>["BEGIN:VEVENT",`UID:${uid}@bitacora`,`DTSTAMP:${icsStamp()}`,`SUMMARY:${sum}`,`DTSTART:${icsDT(start,540)}`,`DTEND:${icsDT(start,555)}`,
+    ...(rule?[`RRULE:${rule};UNTIL=${icsDate(last)}T235959`]:[]),`DESCRIPTION:${desc}`,
+    "BEGIN:VALARM","ACTION:DISPLAY",`DESCRIPTION:${icsEsc("Cobrar a "+x.name)}`,"TRIGGER:PT0M","END:VALARM","END:VEVENT"];
+  if(n===1)return ev(x.id+"-1",first,null);
+  const is15=d=>parse(d).getDate()===15,isEnd=d=>isCobroDay(d)&&!is15(d);
+  const f15=firstWhere(first,is15),fEnd=firstWhere(first,isEnd),out=[];
+  if(f15&&f15<=last)out.push(...ev(x.id+"-15",f15,"FREQ=MONTHLY;BYMONTHDAY=15"));
+  // el 30 de cada mes, o el último día en febrero
+  if(fEnd&&fEnd<=last)out.push(...ev(x.id+"-30",fEnd,"FREQ=MONTHLY;BYMONTHDAY=28,29,30;BYSETPOS=-1"));
+  return out;
+}
+function icsFile(lines,name){
+  const body=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Bitacora//Agenda//ES","CALSCALE:GREGORIAN","METHOD:PUBLISH",...lines,"END:VCALENDAR"].map(icsFold).join("\r\n")+"\r\n";
+  const fn=(String(name).normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w-]+/g,"-").replace(/^-+|-+$/g,"").slice(0,40)||"bitacora")+".ics";
+  return new File([body],fn,{type:"text/calendar"});
+}
+async function sendToCalendar(lines,name){
+  if(!lines.length){toast("No hay nada que programar");return}
+  const file=icsFile(lines,name);
+  try{
+    if(IS_IOS){location.href="data:text/calendar;charset=utf-8,"+encodeURIComponent(await file.text());return}
+    if(IS_ANDROID&&navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});return}
+    const url=URL.createObjectURL(file),a=document.createElement("a");
+    a.href=url;a.download=file.name;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+    toast("Abre el archivo descargado para añadirlo a tu calendario");
+  }catch(e){if(!e||e.name!=="AbortError")toast("No se pudo abrir el calendario")}
+}
+async function shareCalendarFile(lines,name){
+  try{const file=icsFile(lines,name);await navigator.share({files:[file],title:name})}
+  catch(e){if(!e||e.name!=="AbortError")toast("Este teléfono no permite compartir el archivo")}
+}
+let calPending=null;
+function promptCalendar(title,text,lines,name){
+  if(!lines.length)return;
+  calPending={lines,name};
+  $("#cpTitle").textContent=title;$("#cpText").textContent=text;$("#cpGoLbl").textContent="Poner alarma "+CAL_WHERE;
+  $("#cpShare").hidden=!(IS_IOS&&navigator.share);
+  $("#calPrompt").hidden=false;setTimeout(()=>$("#cpGo").focus(),30);
+}
 
 // ---------- task logic ----------
 const isRec=t=>t.repeat&&t.repeat!=="none";
@@ -876,7 +966,7 @@ function renderCobros(m){
     <div class="ctile ${late.length?"warn":""}"><span class="lab">Atrasado</span><span class="val">${money(lateSum)}</span><span class="hint">${late.length?`${late.length} sin pagar a tiempo`:"todos al día"}</span></div>
     <div class="ctile"><span class="lab">Cobrado este mes</span><span class="val">${money(mes)}</span><span class="hint" style="text-transform:capitalize">${fmt(t0,{month:"long"})}</span></div>
   </div>
-  <div class="cbar"><span class="hint">Se cobra cada 15 y 30 (en febrero, el último día). Esos días suena una alarma a las 9:00.</span><button class="btn primary small" data-newdebt="1"><svg class="ico"><use href="#i-plus"/></svg>Nueva persona</button></div>`;
+  <div class="cbar"><span class="hint">Se cobra cada 15 y 30 (en febrero, el último día). Esos días suena una alarma a las 9:00.</span>${open.length?`<button class="btn small" data-calall="1"><svg class="ico"><use href="#i-cal"/></svg>Todos los cobros ${CAL_WHERE}</button>`:""}<button class="btn primary small" data-newdebt="1"><svg class="ico"><use href="#i-plus"/></svg>Nueva persona</button></div>`;
   if(!all.length)h+=`<div class="empty"><h3>Nadie te debe todavía</h3><p>Anota a quién le prestaste, cuánto y la cuota de cada 15 y 30. Aparecerá en el calendario esos días.</p></div>`;
   else{
     h+=open.length?`<div class="debts">${open.map(x=>debtCard(x,t0)).join("")}</div>`:`<div class="empty"><h3>Todos te pagaron</h3><p>No hay saldos pendientes.</p></div>`;
@@ -895,7 +985,7 @@ function debtCard(x,t0){
     <div class="dmeta">Pagó ${money(paid)} de ${money(tot)} · ${x.cuota>0?`cuota ${money(x.cuota)} cada 15 y 30`:"cobro del total"}${s>0?` · próximo: ${nx===t0?"hoy":fmt(nx,{day:"numeric",month:"short"})}`:""}</div>
     <div class="tags">${s<=0?`<span class="pill okp">Pagado completo</span>`:late>0?`<span class="pill late">Atrasado ${money(late)}</span>`:`<span class="pill okp">Al día</span>`}</div>
     ${x.notes?`<span class="tnote">${esc(x.notes)}</span>`:""}
-    <div class="dacts">${s>0?`<button class="btn small cashbtn" data-pay="${x.id}">Registrar pago</button>`:""}<button class="btn small" data-edebt="${x.id}">Editar</button></div>
+    <div class="dacts">${s>0?`<button class="btn small cashbtn" data-pay="${x.id}">Registrar pago</button>`:""}<button class="btn small" data-edebt="${x.id}">Editar</button>${s>0?`<button class="btn small" data-caldebt="${x.id}" title="Poner avisos de cobro ${CAL_WHERE}"><svg class="ico"><use href="#i-cal"/></svg>Alarma</button>`:""}</div>
     ${pays.length?`<details><summary>Historial · ${pays.length} pago${pays.length===1?"":"s"}</summary><div class="hist">${pays.map(p=>`<div><span class="mono" style="color:var(--muted)">${fmt(p.d,{day:"2-digit",month:"short",year:"2-digit"})}</span><span class="a">${money(p.amt)}</span><span class="n">${esc(p.note||"")}</span><button data-delpay="${x.id}" data-pid="${p.id}" aria-label="Borrar pago" title="Borrar pago"><svg class="ico"><use href="#i-x"/></svg></button></div>`).join("")}</div></details>`:""}
   </article>`;
 }
@@ -988,7 +1078,7 @@ function openEditor(id,date,preset){
   renderCL();syncAllDay();syncRepeat();
   $("#seriesHint").hidden=!(t&&isRec(t));
   const del=$("#delBtn");del.hidden=!t;del.classList.remove("armed");del.querySelector("span").textContent="Eliminar";
-  $("#dupBtn").hidden=!t;
+  $("#dupBtn").hidden=!t;$("#calBtn").hidden=!t;
   $("#editor").hidden=false;
   setTimeout(()=>$("#f-title").focus(),30);
 }
@@ -1023,8 +1113,11 @@ function saveEditor(e){
   S.selected=f.date;
   if(S.view!=="agenda"&&!sameRange(f.date))S.cursor=f.date;
   closeEditor();render();
-  toast(old?"Tarea actualizada":(f.alarm>=0&&f.time?`Tarea creada · alarma ${ALNAME[f.alarm].toLowerCase()}`:"Tarea creada"));
-  if(f.alarm>=0&&!soundOn)setTimeout(()=>toast("Toca «Activar sonido» para que la alarma suene"),2600);
+  if(f.alarm>=0&&(!old||timingChanged||old.title!==f.title)){
+    promptCalendar(old?"Tarea actualizada":"Tarea creada",
+      `Para que la alarma (${ALNAME[f.alarm].toLowerCase()}) suene aunque Bitácora esté cerrada, ponla ${CAL_WHERE}.${old?" Si ya la tenías, borra la anterior del Calendario.":""}`,
+      taskEvent({...doc,id}),f.title);
+  }else toast(old?"Tarea actualizada":"Tarea creada");
 }
 function sameRange(d){
   if(S.view==="month"){const a=parse(S.cursor),b=parse(d);return a.getMonth()===b.getMonth()&&a.getFullYear()===b.getFullYear()}
@@ -1061,8 +1154,10 @@ document.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>setView(b.data
 let qT=null;$("#q").addEventListener("input",e=>{clearTimeout(qT);qT=setTimeout(()=>{S.q=e.target.value.trim();render()},120)});
 
 document.addEventListener("click",e=>{
-  const el=e.target.closest("[data-toggle],[data-open],[data-new],[data-cat],[data-day],[data-close],[data-snooze],[data-cldel],[data-cobros],[data-newdebt],[data-pay],[data-edebt],[data-quickpay],[data-delpay]");
+  const el=e.target.closest("[data-toggle],[data-open],[data-new],[data-cat],[data-day],[data-close],[data-snooze],[data-cldel],[data-cobros],[data-newdebt],[data-pay],[data-edebt],[data-quickpay],[data-delpay],[data-caldebt],[data-calall]");
   if(!el)return;
+  if(el.dataset.caldebt){const x=getDebt(el.dataset.caldebt);if(x)sendToCalendar(debtEvents(x),"cobros "+x.name);return}
+  if(el.dataset.calall){sendToCalendar(debts().flatMap(debtEvents),"cobros bitacora");return}
   if(el.dataset.cobros){e.stopPropagation();S.selected=el.dataset.cobros;setView("cobros");return}
   if(el.dataset.newdebt){openDebt(null);return}
   if(el.dataset.pay){openPay(el.dataset.pay);return}
@@ -1112,6 +1207,10 @@ $("#dupBtn").onclick=()=>{
   const id=uid();put(id,{...strip(t),...readForm(),title:readForm().title+" (copia)",done:false,doneDates:[],fired:[],snooze:{},created:Date.now(),updated:Date.now()});
   closeEditor();toast("Tarea duplicada");
 };
+$("#calBtn").onclick=()=>{const t=getTask(S.editing);if(t)sendToCalendar(taskEvent({...t,...readForm(),id:t.id}),t.title)};
+$("#cpGo").onclick=()=>{const p=calPending;$("#calPrompt").hidden=true;if(p)sendToCalendar(p.lines,p.name)};
+$("#cpShare").onclick=()=>{const p=calPending;$("#calPrompt").hidden=true;if(p)shareCalendarFile(p.lines,p.name)};
+$("#calPrompt").addEventListener("click",e=>{if(e.target===e.currentTarget)e.currentTarget.hidden=true});
 
 $("#daynote").addEventListener("input",e=>{
   const d=noteFor||S.selected,txt=e.target.value;
@@ -1150,9 +1249,14 @@ $("#debtForm").addEventListener("submit",e=>{
   if(!total){toast("Escribe cuánto te debe");$("#d-total").focus();return}
   const old=editingDebt?getDebt(editingDebt):null;
   const id=old?old.id:"d_"+uid().slice(2);
-  put(id,{...(old?strip(old):{payments:[],created:Date.now()}),kind:"debt",name,phone:$("#d-phone").value.trim(),total,
-    cuota:Math.min(parseMoney($("#d-cuota").value),total),start:$("#d-start").value||nextCobroDay(todayISO()),notes:$("#d-notes").value,updated:Date.now()});
-  $("#debtView").hidden=true;toast(old?"Deudor actualizado":`${name} anotado · te debe ${money(total)}`);
+  const doc={...(old?strip(old):{payments:[],created:Date.now()}),kind:"debt",name,phone:$("#d-phone").value.trim(),total,
+    cuota:Math.min(parseMoney($("#d-cuota").value),total),start:$("#d-start").value||nextCobroDay(todayISO()),notes:$("#d-notes").value,updated:Date.now()};
+  put(id,doc);
+  $("#debtView").hidden=true;
+  const ev=debtEvents({...doc,id});
+  if(ev.length)promptCalendar(old?"Deudor actualizado":`${name} anotado`,
+    `Te debe ${money(saldoOf(doc))}. Pon los avisos de cobro ${CAL_WHERE}: sonarán a las 9:00 cada 15 y 30 hasta que termine de pagar.${old?" Si ya los tenías, borra los anteriores del Calendario.":""}`,ev,"cobros "+name);
+  else toast(old?"Deudor actualizado":`${name} anotado`);
 });
 $("#dDel").onclick=()=>{
   const b=$("#dDel");
@@ -1223,7 +1327,7 @@ $("#importFile").onchange=async e=>{
 };
 
 document.addEventListener("keydown",e=>{
-  if(e.key==="Escape"){if(!$("#editor").hidden)closeEditor();$("#debtView").hidden=true;$("#payView").hidden=true;return}
+  if(e.key==="Escape"){if(!$("#editor").hidden)closeEditor();["#debtView","#payView","#calPrompt"].forEach(s=>$(s).hidden=true);return}
   if(e.target.closest("input,textarea,select")||e.ctrlKey||e.metaKey||e.altKey)return;
   if(document.querySelector(".overlay:not([hidden])"))return;
   const k=e.key.toLowerCase();
